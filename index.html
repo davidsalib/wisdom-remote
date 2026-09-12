@@ -126,6 +126,7 @@
 
   let state = null;   // last state broadcast by the host
   let myVote = null;  // "wise" | "not" for the current round
+  let mySecs = 0;     // seconds from the card appearing to this phone's vote
   let deadline = 0;
   let subscribed = false;
 
@@ -216,7 +217,7 @@
       return showMsg(myVote ? `<div>Votes are tied<b class="gold">Tie</b>The host decides…</div>` : "");
     }
     // voting
-    showMsg(myVote ? `<div>You voted<b class="${myVote === "wise" ? "gold" : "ash"}">${label(myVote)}</b>waiting for the answer…</div>` : "");
+    showMsg(myVote ? `<div>Nice, you answered in ${mySecs.toFixed(1)} secs<b class="${myVote === "wise" ? "gold" : "ash"}">${label(myVote)}</b>waiting for the answer…</div>` : "");
   }
 
   // timer bar
@@ -230,6 +231,7 @@
   function vote(choice) {
     if (!state || state.status !== "voting" || myVote || !myName) return;
     myVote = choice;
+    mySecs = Math.max(0, VOTE_MS - Math.max(0, deadline - Date.now())) / 1000;
     ch.send({ type: "broadcast", event: "vote", payload: { roundId: state.roundId, cid, name: myName, choice } });
     if (navigator.vibrate) navigator.vibrate(25);
     fly(choice === "wise" ? 1 : -1);
