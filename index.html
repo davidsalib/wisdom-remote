@@ -67,14 +67,21 @@
   #vote-not { color: #c9c0b4; border: 1.5px solid rgba(141,133,122,.6); }
   #vote-wise { color: #f3d88f; border: 1.5px solid rgba(212,171,85,.8); background: rgba(212,171,85,.08); }
 
-  .join { position: fixed; inset: 0; z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+  .join { position: fixed; inset: 0; z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
     padding: 24px; background: rgba(13,8,5,.94); }
   .join[hidden] { display: none; }
   .join label { font: 700 16px "Cinzel", Georgia, serif; letter-spacing: .2em; text-transform: uppercase; color: #d4ab55; }
   .join input { width: min(84vw, 360px); height: 56px; padding: 0 18px; border-radius: 12px; border: 1.5px solid rgba(212,171,85,.6);
     background: rgba(255,255,255,.05); color: #f1e6cc; font: 500 22px "Cormorant Garamond", Georgia, serif; text-align: center; outline: none; }
-  .join button { width: min(84vw, 360px); height: 56px; border-radius: 999px; border: 0; cursor: pointer;
+  .join button[type="submit"] { width: min(84vw, 360px); height: 56px; border-radius: 999px; border: 0; cursor: pointer;
     background: linear-gradient(180deg, #f3d88f, #d4ab55); color: #2a1c10; font: 700 16px "Cinzel", Georgia, serif; letter-spacing: .2em; text-transform: uppercase; }
+  .join button[type="submit"]:disabled { opacity: .4; cursor: default; }
+  .emojis { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; width: min(84vw, 360px); margin-bottom: 6px; }
+  .emojis button { height: 48px; padding: 0; border-radius: 12px; border: 1.5px solid transparent; background: rgba(255,255,255,.06); font-size: 26px; cursor: pointer; }
+  .emojis button[aria-pressed="true"] { border-color: #f3d88f; background: rgba(212,171,85,.25); }
+  .msg .big-emoji { display: block; font-size: 72px; line-height: 1; font-style: normal; margin-bottom: 6px; }
+  .msg small { display: block; margin-top: 14px; font-size: 16px; opacity: .6; }
+  #score { cursor: pointer; }
 </style>
 </head>
 <body>
@@ -102,7 +109,9 @@
   <form class="join" id="join" hidden>
     <label for="name">Your name</label>
     <input id="name" maxlength="20" autocomplete="nickname" placeholder="Name" required>
-    <button type="submit">Join</button>
+    <label>Pick your emoji</label>
+    <div class="emojis" id="emojis"></div>
+    <button type="submit" id="join-btn" disabled>Join</button>
   </form>
 
 <script>
@@ -123,6 +132,9 @@
   let cid = store.get("wisdom-cid");
   if (!cid) { cid = (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now()); store.set("wisdom-cid", cid); }
   let myName = store.get("wisdom-name") || "";
+  let myEmoji = store.get("wisdom-emoji") || "";
+  const EMOJIS = ["🦁", "🐑", "🕊️", "🐟", "🦅", "🐂", "🐍", "🌿", "🌳", "🍇", "🍞", "🏺", "🔥", "⭐", "🌙", "☀️", "🌊", "⛰️", "👑", "⚓", "🪔", "🗝️", "📜", "🕯️"];
+  const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
   let state = null;   // last state broadcast by the host
   let myVote = null;  // "wise" | "not" for the current round
@@ -143,26 +155,51 @@
     }
   });
 
+  let lastHello = 0;
   function hello() {
-    if (subscribed) ch.send({ type: "broadcast", event: "hello", payload: { cid, name: myName } });
+    if (!subscribed || !myName || !myEmoji) return;
+    lastHello = Date.now();
+    ch.send({ type: "broadcast", event: "hello", payload: { cid, name: myName, emoji: myEmoji } });
   }
 
-  // name entry
-  if (!myName) { $("join").hidden = false; setTimeout(() => $("name").focus(), 50); }
+  // join: name + emoji
+  let pickedEmoji = myEmoji;
+  const syncJoin = () => { $("join-btn").disabled = !$("name").value.trim() || !pickedEmoji; };
+  EMOJIS.forEach((em) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = em;
+    btn.setAttribute("aria-pressed", String(em === pickedEmoji));
+    btn.onclick = () => {
+      pickedEmoji = em;
+      $("emojis").querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", String(x === btn)));
+      syncJoin();
+    };
+    $("emojis").appendChild(btn);
+  });
+  $("name").oninput = syncJoin;
+  function openJoin() { $("name").value = myName; syncJoin(); $("join").hidden = false; }
+  if (!myName || !myEmoji) openJoin();
   $("join").onsubmit = (e) => {
     e.preventDefault();
     const n = $("name").value.trim().slice(0, 20);
-    if (!n) return;
+    if (!n || !pickedEmoji) return;
     myName = n;
+    myEmoji = pickedEmoji;
     store.set("wisdom-name", n);
+    store.set("wisdom-emoji", myEmoji);
     $("join").hidden = true;
     hello();
     render();
   };
+  // tap your name to change name/emoji while waiting in the lobby
+  $("score").onclick = () => { if (!state || state.status === "lobby" || state.status === "waiting") openJoin(); };
 
   function apply(s) {
     const newRound = !state || s.roundId !== state.roundId;
     state = s;
+    // host (re)loaded and doesn't know this phone yet: announce ourselves so we appear in the members grid
+    if (s.scores && !s.scores[cid] && Date.now() - lastHello > 2000) hello();
     if (s.status === "voting") deadline = Date.now() + s.remaining;
     if (newRound) {
       myVote = null;
@@ -192,11 +229,17 @@
     const voting = s && s.status === "voting";
     const me = s && s.scores ? s.scores[cid] : null; // [score, gained, rank]
     $("vote-not").disabled = $("vote-wise").disabled = !voting || !!myVote || !myName;
-    $("progress").textContent = s && s.total && s.status !== "ended" && s.status !== "waiting" ? `${s.idx + 1} / ${s.total}` : "";
-    $("score").textContent = myName ? `${myName} · ${me ? me[0] : 0} pts` : "";
+    $("progress").textContent = s && s.total && !["ended", "waiting", "lobby"].includes(s.status) ? `${s.idx + 1} / ${s.total}` : "";
+    $("score").textContent = myName ? `${myEmoji} ${myName} · ${me ? me[0] : 0} pts` : "";
 
     if (!s || s.status === "waiting") {
       card.hidden = true; return showMsg("Waiting for the host…");
+    }
+    if (s.status === "lobby") {
+      card.hidden = true;
+      return showMsg(myName && myEmoji
+        ? `<div><span class="big-emoji">${esc(myEmoji)}</span><b class="gold">You're in</b>${esc(myName)}, waiting for the host to start…<small>Tap your name above to change it</small></div>`
+        : "Enter your name to join");
     }
     if (s.status === "ended") {
       card.hidden = true;
@@ -229,10 +272,10 @@
   }, 100);
 
   function vote(choice) {
-    if (!state || state.status !== "voting" || myVote || !myName) return;
+    if (!state || state.status !== "voting" || myVote || !myName || !myEmoji) return;
     myVote = choice;
     mySecs = Math.max(0, VOTE_MS - Math.max(0, deadline - Date.now())) / 1000;
-    ch.send({ type: "broadcast", event: "vote", payload: { roundId: state.roundId, cid, name: myName, choice } });
+    ch.send({ type: "broadcast", event: "vote", payload: { roundId: state.roundId, cid, name: myName, emoji: myEmoji, choice } });
     if (navigator.vibrate) navigator.vibrate(25);
     fly(choice === "wise" ? 1 : -1);
     render();
