@@ -156,10 +156,16 @@
   });
 
   let lastHello = 0;
+  let helloTimer = 0;
   function hello() {
     if (!subscribed || !myName || !myEmoji) return;
     lastHello = Date.now();
     ch.send({ type: "broadcast", event: "hello", payload: { cid, name: myName, emoji: myEmoji } });
+  }
+  // at most one hello per 2s, but never drop one: if we just said hello, retry when the window ends
+  function helloSoon() {
+    if (helloTimer) return;
+    helloTimer = setTimeout(() => { helloTimer = 0; hello(); }, Math.max(0, 2000 - (Date.now() - lastHello)));
   }
 
   // join: name + emoji
@@ -199,7 +205,7 @@
     const newRound = !state || s.roundId !== state.roundId;
     state = s;
     // host (re)loaded and doesn't know this phone yet: announce ourselves so we appear in the members grid
-    if (s.scores && !s.scores[cid] && Date.now() - lastHello > 2000) hello();
+    if (s.scores && !s.scores[cid]) helloSoon();
     if (s.status === "voting") deadline = Date.now() + s.remaining;
     if (newRound) {
       myVote = null;
